@@ -1,0 +1,27 @@
+[build-system]
+requires = ["setuptools"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "gigaamcli"
+version = "0.1.0"
+description = "Локальная консольная транскрибация на GigaAM для Apple Silicon с диаризацией на MLX/Metal"
+requires-python = ">=3.10"
+dynamic = []
+dependencies = [
+    "gigaam @ https://github.com/salute-developers/GigaAM/archive/refs/heads/main.zip",
+    "torch",
+    "torchaudio",
+    "silero-vad",
+    "mlx-audio",
+    "soundfile",
+    "numpy",
+    "loguru",
+    "tqdm",
+]
+
+[project.scripts]
+gigaam = "gigaam_cli:main"
+
+[tool.setuptools]
+py-modules = ["config", "gigaam_cli", "stt_audio", "stt_models", "stt_output"]

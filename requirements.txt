@@ -1,0 +1,9 @@
+gigaam @ https://github.com/salute-developers/GigaAM/archive/refs/heads/main.zip
+torch
+torchaudio
+silero-vad
+mlx-audio
+soundfile
+numpy
+loguru
+tqdm
