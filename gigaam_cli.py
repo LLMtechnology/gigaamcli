@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import argparse
+import hashlib
 import importlib.metadata
 import json
 import os
@@ -12,6 +13,8 @@ import time
 from loguru import logger
 
 import config
+
+
 def arguments():
     parser = argparse.ArgumentParser(
         prog="gigaam",
@@ -52,7 +55,9 @@ def check_installation():
     import mlx.core as mx
     import torch
 
-    print(f"Python: {sys.version.split()[0]}")
+    import stt_models
+
+    print(f"Python: {sys.version.split()[0]} ({sys.executable})")
     print(f"ffmpeg: {shutil.which('ffmpeg') or 'НЕ НАЙДЕН'}")
     print(f"GigaAM MPS: {torch.backends.mps.is_available()}")
     print(f"Sortformer MLX Metal: {mx.metal.is_available()}")
@@ -60,6 +65,8 @@ def check_installation():
         print(f"{package}: {importlib.metadata.version(package)}")
     print(f"Кеш GigaAM: {config.MODEL_CACHE}")
     print(f"Диаризация: {config.DIARIZATION_MODEL}")
+    stt_models.check_diarization()
+    print("Импорт Sortformer: OK")
 
 
 def write_results(paths, rendered, force):
@@ -67,6 +74,28 @@ def write_results(paths, rendered, force):
         with path.open("w" if force else "x", encoding="utf-8") as output:
             output.write(rendered[file_format])
         logger.info("Сохранено: {}", path)
+
+
+def transcription_cache_path(source, model_name, device):
+    source_stat = source.stat()
+    identity = {
+        "source": str(source), "size": source_stat.st_size, "modified": source_stat.st_mtime_ns,
+        "model": model_name, "device": device, "sample_rate": config.SAMPLE_RATE,
+        "chunk_seconds": config.MAX_CHUNK_SECONDS, "padding": config.CHUNK_PADDING_SECONDS,
+        "min_speech": config.VAD_MIN_SPEECH_MS, "min_silence": config.VAD_MIN_SILENCE_MS,
+        "versions": {name: importlib.metadata.version(name) for name in ("gigaam", "torch", "silero-vad")},
+    }
+    digest = hashlib.sha256(json.dumps(identity, sort_keys=True).encode()).hexdigest()
+    return config.TRANSCRIPTION_CACHE / f"{digest}.json"
+
+
+def save_transcription(path, words):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=path.parent, delete=False) as output:
+        json.dump(words, output, ensure_ascii=False)
+        temporary_path = pathlib.Path(output.name)
+    temporary_path.replace(path)
+    logger.info("Распознавание сохранено для повторного запуска")
 
 
 def run(args):
@@ -95,15 +124,23 @@ def run(args):
         if path.exists() and not args.force:
             raise FileExistsError(f"Результат уже существует: {path}. Укажите --force или другой --output-dir")
     device = stt_models.resolve_device(args.device)
+    if not args.no_diarize:
+        stt_models.check_diarization()
+    cache_path = transcription_cache_path(source, args.model, device)
     started = time.monotonic()
     with tempfile.TemporaryDirectory(prefix="gigaam-") as scratch:
         logger.info("Подготовка аудио: {}", source.name)
         audio = stt_audio.decode_audio(source, pathlib.Path(scratch) / "audio.wav")
         duration = len(audio) / config.SAMPLE_RATE
         logger.info("Длительность: {}", stt_output.format_timestamp(duration))
-        chunks = stt_audio.speech_chunks(audio)
-        logger.info("Найдено речевых фрагментов: {}", len(chunks))
-        words = stt_models.transcribe(audio, chunks, scratch, args.model, device) if chunks else []
+        if cache_path.is_file():
+            words = json.loads(cache_path.read_text(encoding="utf-8"))
+            logger.info("Продолжаем с сохранённого распознавания: {} слов", len(words))
+        else:
+            chunks = stt_audio.speech_chunks(audio)
+            logger.info("Найдено речевых фрагментов: {}", len(chunks))
+            words = stt_models.transcribe(audio, chunks, scratch, args.model, device) if chunks else []
+            save_transcription(cache_path, words)
         turns = stt_models.diarize(audio, args.threshold) if words and not args.no_diarize else []
         if words and not args.no_diarize and not turns:
             raise RuntimeError("Диаризация не обнаружила голоса. Попробуйте меньший --threshold или --no-diarize")
@@ -126,6 +163,7 @@ def run(args):
     }
     output_dir.mkdir(parents=True, exist_ok=True)
     write_results(paths, rendered, args.force)
+    cache_path.unlink(missing_ok=True)
     print(plain_text, end="")
     logger.info("Готово за {:.1f} с; аудио {:.1f} с", elapsed, duration)
 
@@ -144,4 +182,10 @@ def main():
             logger.exception("Ошибка: {}", error)
         else:
             logger.error("Ошибка: {}", error)
+            cause = error
+            while cause.__cause__ is not None:
+                cause = cause.__cause__
+            if cause is not error:
+                logger.error("Причина: {}: {}", type(cause).__name__, cause)
         raise SystemExit(1)
+

@@ -1,0 +1,10 @@
+#!/usr/bin/env python3
+import pathlib
+import runpy
+import sys
+
+script = pathlib.Path(__file__).resolve().with_name("gigaam_cli.py")
+sys.path.insert(0, str(script.parent))
+sys.argv[0] = str(script)
+runpy.run_path(str(script), run_name="__main__")["main"]()
+

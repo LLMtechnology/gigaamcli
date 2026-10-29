@@ -1,4 +1,5 @@
 import gc
+import importlib
 import pathlib
 
 import soundfile
@@ -15,6 +16,14 @@ def resolve_device(requested):
     if requested == "mps" and not torch.backends.mps.is_available():
         raise RuntimeError("MPS недоступен в установленном PyTorch. Используйте --device cpu")
     return requested
+
+
+def check_diarization():
+    import mlx.core as mx
+
+    if not mx.metal.is_available():
+        raise RuntimeError("Sortformer MLX требует Apple Silicon с доступным Metal GPU")
+    importlib.import_module("mlx_audio.vad.models.sortformer")
 
 
 def transcribe(audio, chunks, scratch, model_name, device):
@@ -93,3 +102,4 @@ def diarize(audio, threshold):
         [turn for turn in merged if turn["end"] - turn["start"] >= 0.15],
         key=lambda turn: (turn["start"], turn["speaker"]),
     )
+
